@@ -1,0 +1,13 @@
+bin/
+obj/
+captures/
+data/
+*.user
+.env
+.env.*
+*.pem
+*.pfx
+*.key
+*.log
+appsettings.Local.json
+appsettings.*.local.json
