@@ -19,7 +19,7 @@ var timestamp = DateTimeOffset.UtcNow;
 JsonElement Signal(int sequence, string type = "signal", string stop = "774.568") =>
     JsonSerializer.SerializeToElement(new
     {
-        type, symbol = "SPY", signalType = "buy", timeframe = "5",
+        type, symbol = "QQQ", signalType = "buy", timeframe = "5",
         time = timestamp.AddSeconds(sequence).ToString("O"),
         longEntry = "778.46", longTp = "782.352", longSl = stop
     });
@@ -36,6 +36,12 @@ try
         journalPath, new HttpClient(handler, disposeHandler: false)))
     {
         Check((await trader.ProcessAsync(Signal(0, "test"))).StartsWith("Skipped:"), "Test event blocked");
+        var spySignal = JsonSerializer.SerializeToElement(new
+        {
+            type = "signal", symbol = "SPY", signalType = "buy", timeframe = "5",
+            time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568"
+        });
+        Check((await trader.ProcessAsync(spySignal)).StartsWith("Skipped:"), "SPY signal rejected after QQQ switch");
         Check((await trader.ProcessAsync(Signal(0, "signal", "NaN"))).StartsWith("Skipped:"), "Invalid stop blocked");
         Check((await trader.ProcessAsync(Signal(-600))).StartsWith("Skipped:"), "Stale signal blocked");
         Check(handler.Requests == 0, "Rejected events made no API requests");
@@ -53,7 +59,7 @@ try
         Check((await trader.ProcessAsync(Signal(2))).Contains("position is already open"), "Open position blocks new signal");
         handler.PositionSize = "0";
         handler.ActiveOrders = true;
-        Check((await trader.ProcessAsync(Signal(3))).Contains("active SPYUSDT"), "Active SPYUSDT order blocks new signal");
+        Check((await trader.ProcessAsync(Signal(3))).Contains("active QQQUSDT"), "Active QQQUSDT order blocks new signal");
         handler.ActiveOrders = false;
     }
 
@@ -87,10 +93,10 @@ try
         Check((await trader.ProcessAsync(Signal(0))).Contains("test-only"), "Temporary mode rejects real signals");
         Check((await trader.ProcessAsync(Signal(-600, "test"))).Contains("stale"), "Test retains timestamp guard");
         testHandler.PositionSize = "2.56";
-        Check((await trader.ProcessAsync(Signal(0, "test"))).Contains("position is already open"), "Test blocked by existing SPYUSDT position");
+        Check((await trader.ProcessAsync(Signal(0, "test"))).Contains("position is already open"), "Test blocked by existing QQQUSDT position");
         testHandler.PositionSize = "0";
         testHandler.ActiveOrders = true;
-        Check((await trader.ProcessAsync(Signal(0, "test"))).Contains("active SPYUSDT"), "Test blocked by pending SPYUSDT order");
+        Check((await trader.ProcessAsync(Signal(0, "test"))).Contains("active QQQUSDT"), "Test blocked by pending QQQUSDT order");
         testHandler.ActiveOrders = false;
         var results = await Task.WhenAll(trader.ProcessAsync(Signal(0, "test")),
             trader.ProcessAsync(Signal(1, "test")));
@@ -125,7 +131,7 @@ try
         Path.Combine(directory, "rejected-executions.json"), new HttpClient(rejectedHandler)))
     {
         var result = await trader.ProcessAsync(Signal(0, "test"));
-        Check(result.Contains("Bybit code 10003") && result.Contains("checking open SPYUSDT orders"),
+        Check(result.Contains("Bybit code 10003") && result.Contains("checking open QQQUSDT orders"),
             "Structured SDK error identifies code and failed check: " + result);
         Check(!result.Contains("mock-key") && !result.Contains("sensitive-error") && rejectedHandler.Orders == 0,
             "SDK diagnostic omits raw error and credentials; no order submitted");
@@ -193,7 +199,7 @@ try
         Signal(0), "Demo market fill", 1);
     var sellSignal = JsonSerializer.SerializeToElement(new
     {
-        type = "signal", symbol = "SPY", signalType = "sell", timeframe = "5", time = timestamp.ToString("O"),
+        type = "signal", symbol = "QQQ", signalType = "sell", timeframe = "5", time = timestamp.ToString("O"),
         shortEntry = "778.46", shortTp = "774.568", shortSl = "782.352"
     });
     await MarketCase("SELL uses bid and preserves short TP/SL",
@@ -219,6 +225,20 @@ try
     configuration["Bybit:MarketRiskBufferPercent"] = "10";
     await MarketCase("Invalid market sizing buffer rejects entry", new DemoHandler(), Signal(0), "risk buffer", 0);
     configuration["Bybit:MarketRiskBufferPercent"] = null;
+
+    var legacySpyJournal = Path.Combine(directory, "legacy-spy-executions.json");
+    await File.WriteAllTextAsync(legacySpyJournal, JsonSerializer.Serialize(new[]
+    {
+        new { orderLinkId = "legacy-spy-order", symbol = "SPYUSDT", state = "Unknown", isTest = false }
+    }));
+    var qqqHandler = new DemoHandler();
+    using (qqqHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        legacySpyJournal, new HttpClient(qqqHandler)))
+    {
+        Check((await trader.ProcessAsync(Signal(1, "signal"))).StartsWith("Demo market fill"),
+            "Legacy unresolved SPY record does not block QQQ execution");
+    }
 }
 finally
 {
@@ -306,7 +326,7 @@ sealed class DemoHandler : HttpMessageHandler
                 using (var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken)))
                 {
                     var order = document.RootElement;
-                    if (order.GetProperty("symbol").GetString() != "SPYUSDT" ||
+                    if (order.GetProperty("symbol").GetString() != "QQQUSDT" ||
                         order.GetProperty("category").GetString() != "linear" ||
                         order.GetProperty("orderType").GetString() != "Market" ||
                         order.GetProperty("qty").GetString() != ExpectedQuantity ||
@@ -330,10 +350,10 @@ sealed class DemoHandler : HttpMessageHandler
                     cumExecQty = FilledQuantity ?? SubmittedQuantity, avgPrice = FillPrice ?? LastPrice } } };
                 break;
             case "/v5/order/realtime":
-                result = new { list = ActiveOrders ? new[] { new { symbol = "SPYUSDT", orderStatus = "New" } } : [], nextPageCursor = "" };
+                result = new { list = ActiveOrders ? new[] { new { symbol = "QQQUSDT", orderStatus = "New" } } : [], nextPageCursor = "" };
                 break;
             case "/v5/position/list":
-                result = new { category = "linear", list = new[] { new { symbol = "SPYUSDT", size = PositionSize,
+                result = new { category = "linear", list = new[] { new { symbol = "QQQUSDT", size = PositionSize,
                     positionIdx = 0, side = ExpectedSide, stopLoss = ProtectionPresent ? ExpectedStop : "0",
                     takeProfit = ProtectionPresent ? ExpectedTarget : "0" } }, nextPageCursor = "" };
                 break;
@@ -342,7 +362,7 @@ sealed class DemoHandler : HttpMessageHandler
                 {
                     list = new[] { new
                     {
-                        symbol = "SPYUSDT", status = "Trading", contractType = "LinearPerpetual", settleCoin = "USDT",
+                        symbol = "QQQUSDT", status = "Trading", contractType = "LinearPerpetual", settleCoin = "USDT",
                         priceFilter = new { tickSize = "0.01" },
                         lotSizeFilter = new { qtyStep = "0.01", minOrderQty = "0.01", maxOrderQty = "5200",
                             maxMktOrderQty = MaximumMarketQuantity, minNotionalValue = "5" }
@@ -350,7 +370,7 @@ sealed class DemoHandler : HttpMessageHandler
                 };
                 break;
             case "/v5/market/tickers":
-                result = new { list = new[] { new { symbol = "SPYUSDT", lastPrice = LastPrice,
+                result = new { list = new[] { new { symbol = "QQQUSDT", lastPrice = LastPrice,
                     bid1Price = BidPrice ?? LastPrice, ask1Price = AskPrice ?? LastPrice } } };
                 break;
             default:

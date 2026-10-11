@@ -21,10 +21,10 @@ public static class DemoOrderPlanner
             !string.Equals(eventType.GetString(), allowedEventType, StringComparison.Ordinal))
             return null;
 
-        reason = "Only SPY/SPYUSDT BUY or SELL signals are supported.";
+        reason = "Only QQQ/QQQUSDT BUY or SELL signals are supported.";
         if (!payload.TryGetProperty("symbol", out var symbol) ||
             symbol.ValueKind != JsonValueKind.String ||
-            (symbol.GetString() != "SPY" && symbol.GetString() != "SPYUSDT") ||
+            (symbol.GetString() != "QQQ" && symbol.GetString() != "QQQUSDT") ||
             !payload.TryGetProperty("signalType", out var signalType) ||
             signalType.ValueKind != JsonValueKind.String)
             return null;

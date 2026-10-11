@@ -18,7 +18,7 @@ public static class BybitDemoAuthenticationCheck
         if (key.Any(char.IsWhiteSpace) || secret.Any(char.IsWhiteSpace))
             return new(false, null, null, "Credentials contain whitespace; re-enter the original matching pair privately.");
 
-        const string query = "category=linear&symbol=SPYUSDT&limit=1";
+        const string query = "category=linear&symbol=QQQUSDT&limit=1";
         const string receiveWindow = "5000";
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
         var signature = Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret),

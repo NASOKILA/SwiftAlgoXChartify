@@ -12,6 +12,7 @@ using Newtonsoft.Json.Linq;
 public sealed class BybitDemoTrader : IDisposable
 {
     private const string DemoUrl = "https://api-demo.bybit.com";
+    private const string Symbol = "QQQUSDT";
     private readonly IConfiguration configuration;
     private readonly ILogger<BybitDemoTrader> logger;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -81,7 +82,7 @@ public sealed class BybitDemoTrader : IDisposable
                 signalTime - DateTimeOffset.UtcNow > TimeSpan.FromSeconds(30))
                 return "Skipped: missing, stale or future signal timestamp.";
 
-            var identity = string.Join("|", "SPYUSDT", allowedType, plan.Side,
+            var identity = string.Join("|", Symbol, allowedType, plan.Side,
                 payload.TryGetProperty("timeframe", out var interval) ? interval.ToString() : "",
                 signalTime.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
                 Format(plan.Entry), Format(plan.TakeProfit), Format(plan.StopLoss));
@@ -92,16 +93,18 @@ public sealed class BybitDemoTrader : IDisposable
 
             var trade = new BybitTradeService(client, apiKey: key, apiSecret: secret, url: DemoUrl);
             var positions = new BybitPositionService(client, apiKey: key, apiSecret: secret, url: DemoUrl);
-            foreach (var group in records.GroupBy(record => record["orderLinkId"]?.Value<string>()))
+            foreach (var group in records
+                .Where(record => record["symbol"]?.Value<string>() == Symbol)
+                .GroupBy(record => record["orderLinkId"]?.Value<string>()))
             {
                 var last = group.Last();
                 var state = last["state"]?.Value<string>();
                 if (state is "Submitting" or "Unknown")
                     return "Paused: unresolved submission in execution journal; reconcile manually.";
                 if (state != "Accepted") continue;
-                stage = "checking previous SPYUSDT order history";
+                stage = $"checking previous {Symbol} order history";
                 var history = Response(await trade.GetOrdersHistory(Category.LINEAR,
-                    symbol: "SPYUSDT", orderLinkId: group.Key));
+                    symbol: Symbol, orderLinkId: group.Key));
                 var order = history["result"]?["list"]?.First;
                 var status = order?["orderStatus"]?.Value<string>();
                 if (status is not ("Filled" or "Cancelled" or "Rejected" or "Deactivated" or "PartiallyFilledCanceled"))
@@ -109,37 +112,37 @@ public sealed class BybitDemoTrader : IDisposable
             }
 
             string? cursor = null;
-            stage = "checking open SPYUSDT orders";
+            stage = $"checking open {Symbol} orders";
             do
             {
                 var active = Response(await trade.GetOpenOrders(Category.LINEAR,
-                    symbol: "SPYUSDT", limit: 50, cursor: cursor));
+                    symbol: Symbol, limit: 50, cursor: cursor));
                 if (active["result"]?["list"] is not JArray orders)
                     throw new InvalidOperationException("Missing open-order data.");
-                if (orders.Any(order => order["symbol"]?.Value<string>() == "SPYUSDT"))
-                    return "Skipped: an active SPYUSDT order already exists.";
+                if (orders.Any(order => order["symbol"]?.Value<string>() == Symbol))
+                    return $"Skipped: an active {Symbol} order already exists.";
                 cursor = active["result"]?["nextPageCursor"]?.Value<string>();
             } while (!string.IsNullOrEmpty(cursor));
 
             cursor = null;
-            stage = "checking SPYUSDT positions";
+            stage = $"checking {Symbol} positions";
             do
             {
                 var response = await positions.GetPositionInfo(Category.LINEAR,
-                    symbol: "SPYUSDT", limit: 200, cursor: cursor);
+                    symbol: Symbol, limit: 200, cursor: cursor);
                 var positionData = Response(JsonConvert.SerializeObject(response));
                 if (positionData["result"]?["list"] is not JArray list)
                     throw new InvalidOperationException("Missing position data.");
                 foreach (var position in list)
                 {
-                    if (position["symbol"]?.Value<string>() != "SPYUSDT") continue;
+                    if (position["symbol"]?.Value<string>() != Symbol) continue;
                     if (!decimal.TryParse(position["size"]?.ToString(), NumberStyles.Float,
                         CultureInfo.InvariantCulture, out var size))
                         throw new InvalidOperationException("Invalid position size.");
-                    if (size != 0) return "Skipped: a SPYUSDT position is already open.";
-                    if (position["symbol"]?.Value<string>() == "SPYUSDT" &&
+                    if (size != 0) return $"Skipped: a {Symbol} position is already open.";
+                    if (position["symbol"]?.Value<string>() == Symbol &&
                         position["positionIdx"]?.Value<int>() != 0)
-                        return "Skipped: SPYUSDT must use one-way position mode.";
+                        return $"Skipped: {Symbol} must use one-way position mode.";
                 }
                 cursor = positionData["result"]?["nextPageCursor"]?.Value<string>();
             } while (!string.IsNullOrEmpty(cursor));
@@ -153,8 +156,8 @@ public sealed class BybitDemoTrader : IDisposable
             await RecordAsync(linkId, "Submitting", plan, null, isTest);
             try
             {
-                stage = "submitting SPYUSDT demo order";
-                var raw = await trade.PlaceOrder(Category.LINEAR, "SPYUSDT",
+                stage = $"submitting {Symbol} demo order";
+                var raw = await trade.PlaceOrder(Category.LINEAR, Symbol,
                     plan.Side == "Buy" ? Side.BUY : Side.SELL, OrderType.MARKET,
                     qty: Format(plan.Quantity),
                     timeInForce: TimeInForce.IOC, positionIdx: 0, orderLinkId: linkId,
@@ -205,21 +208,21 @@ public sealed class BybitDemoTrader : IDisposable
         DemoOrderPlan chartPlan, string allowedType, decimal maximumNotional, bool allowTestOrders)
     {
         using var instrumentResponse = await client.GetAsync(
-            DemoUrl + "/v5/market/instruments-info?category=linear&symbol=SPYUSDT");
+            DemoUrl + $"/v5/market/instruments-info?category=linear&symbol={Symbol}");
         instrumentResponse.EnsureSuccessStatusCode();
         var instrument = Response(await instrumentResponse.Content.ReadAsStringAsync())["result"]?["list"]?.First;
-        if (instrument?["symbol"]?.Value<string>() != "SPYUSDT" ||
+        if (instrument?["symbol"]?.Value<string>() != Symbol ||
             instrument["status"]?.Value<string>() != "Trading" ||
             instrument["contractType"]?.Value<string>() != "LinearPerpetual" ||
             instrument["settleCoin"]?.Value<string>() != "USDT")
-            return (null, "SPYUSDT is not an available USDT perpetual.");
+            return (null, $"{Symbol} is not an available USDT perpetual.");
 
         using var tickerResponse = await client.GetAsync(
-            DemoUrl + "/v5/market/tickers?category=linear&symbol=SPYUSDT");
+            DemoUrl + $"/v5/market/tickers?category=linear&symbol={Symbol}");
         tickerResponse.EnsureSuccessStatusCode();
         var tickerData = Response(await tickerResponse.Content.ReadAsStringAsync());
         var ticker = tickerData["result"]?["list"]?.First;
-        if (ticker?["symbol"]?.Value<string>() != "SPYUSDT" ||
+        if (ticker?["symbol"]?.Value<string>() != Symbol ||
             !DecimalValue(ticker["bid1Price"], out var bid) || bid <= 0 ||
             !DecimalValue(ticker["ask1Price"], out var ask) || ask <= 0 || bid > ask)
             return (null, "missing or invalid Bybit bid/ask.");
@@ -254,7 +257,7 @@ public sealed class BybitDemoTrader : IDisposable
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var history = Response(await trade.GetOrdersHistory(Category.LINEAR,
-                symbol: "SPYUSDT", orderLinkId: linkId));
+                symbol: Symbol, orderLinkId: linkId));
             var order = history["result"]?["list"]?.FirstOrDefault(item =>
                 item["orderLinkId"]?.Value<string>() == linkId);
             var status = order?["orderStatus"]?.Value<string>();
@@ -280,9 +283,9 @@ public sealed class BybitDemoTrader : IDisposable
                 }
 
                 var positionData = Response(JsonConvert.SerializeObject(
-                    await positions.GetPositionInfo(Category.LINEAR, symbol: "SPYUSDT")));
+                    await positions.GetPositionInfo(Category.LINEAR, symbol: Symbol)));
                 var position = positionData["result"]?["list"]?.FirstOrDefault(item =>
-                    item["symbol"]?.Value<string>() == "SPYUSDT" && item["positionIdx"]?.Value<int>() == 0);
+                    item["symbol"]?.Value<string>() == Symbol && item["positionIdx"]?.Value<int>() == 0);
                 if (position is not null && position["side"]?.Value<string>() == plan.Side &&
                     DecimalValue(position["size"], out var positionSize) && positionSize == filledQuantity &&
                     DecimalValue(position["stopLoss"], out var stop) && stop == plan.StopLoss &&
@@ -291,7 +294,7 @@ public sealed class BybitDemoTrader : IDisposable
                     var verification = JObject.FromObject(new { filledQuantity, averagePrice, actualGrossRiskUsdt = actualRisk,
                         stopLoss = stop, takeProfit = target, status });
                     await RecordAsync(linkId, "VerifiedFill", plan, verification, isTest);
-                    return $"Demo market fill and TP/SL verified: {Format(filledQuantity)} SPY at {Format(averagePrice)}, " +
+                    return $"Demo market fill and TP/SL verified: {Format(filledQuantity)} QQQ at {Format(averagePrice)}, " +
                         $"gross stop-distance risk {Format(actualRisk)} USDT. Order link ID: {linkId}";
                 }
             }
@@ -307,7 +310,7 @@ public sealed class BybitDemoTrader : IDisposable
         bool isTest = false) =>
         journal.AppendAsync(System.Text.Json.JsonSerializer.SerializeToElement(new
         {
-            orderLinkId = linkId, state, isTest, recordedAtUtc = DateTimeOffset.UtcNow, plan,
+            orderLinkId = linkId, symbol = Symbol, state, isTest, recordedAtUtc = DateTimeOffset.UtcNow, plan,
             response = response is null ? (JsonElement?)null :
                 System.Text.Json.JsonSerializer.Deserialize<JsonElement>(response.ToString())
         }), CancellationToken.None);
