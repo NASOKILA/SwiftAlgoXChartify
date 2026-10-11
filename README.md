@@ -62,9 +62,9 @@ This is a small local event store, not a production database: every append reads
 
 ## Bybit Demo trading
 
-The executor uses Bybit's official `bybit.net.api` SDK and is restricted to `https://api-demo.bybit.com`, `SPYUSDT`, USDT linear perpetuals, and one-way position mode. No live-money endpoint is configurable. Demo is different from Testnet: create keys inside **Demo Trading** on your mainnet Bybit account. See https://bybit-exchange.github.io/docs/v5/demo.
+The executor uses Bybit's official `bybit.net.api` SDK and is restricted to `https://api-demo.bybit.com`, `QQQUSDT`, USDT linear perpetuals, and one-way position mode. No live-money endpoint is configurable. Demo is different from Testnet: create keys inside **Demo Trading** on your mainnet Bybit account. See https://bybit-exchange.github.io/docs/v5/demo.
 
-BUY opens a long; SELL opens a short. SELL does not close an existing long. Any open SPYUSDT position or active SPYUSDT order blocks new entries, including manual orders. Other symbols do not block SPYUSDT. Checks are paginated. Use a dedicated demo account with no competing trading applications; remote manual activity cannot be locked atomically by this API. There is no Trade Quality Score filter yet.
+BUY opens a QQQUSDT long; SELL opens a QQQUSDT short. SELL does not close an existing long. Any open QQQUSDT position or active QQQUSDT order blocks new entries, including manual orders. Other symbols do not block QQQUSDT. Existing SPYUSDT positions/orders are not changed and do not block QQQUSDT. Checks are paginated. Use a dedicated demo account with no competing trading applications; remote manual activity cannot be locked atomically by this API. There is no Trade Quality Score filter yet.
 
 ### Start with dry run
 
@@ -79,7 +79,7 @@ dotnet run --urls http://localhost:5080
 
 Keep the existing `Webhook__Token` set in this terminal. For a recognized event, the API prints a **DEMO DRY RUN** market plan using public Bybit contract limits and fresh bid/ask data. No authenticated API calls or orders are made during a dry run. The plan's `Entry` is an adverse-price sizing estimate, not a limit price or promised fill. Old saved events are not replayed.
 
-The payload must include `symbol` (SPY or SPYUSDT), `signalType` (buy/sell), `type`, and `time`. For custom templates it reads `longEntry`, `longTp`, `longSl` on BUY, or `shortEntry`, `shortTp`, `shortSl` on SELL. The default payload's `entry`, `tp`, and `sl` are also supported. Quoted decimal prices are accepted; `NaN`, missing stops, and invalid price brackets are rejected. Do not rename these fields without updating the planner.
+The Chartify payload must now identify the instrument as `symbol: "QQQ"` or `symbol: "QQQUSDT"`; `SPY`/`SPYUSDT` alerts are rejected by the planner. It must also include `signalType` (buy/sell), `type`, and `time`. For custom templates it reads `longEntry`, `longTp`, `longSl` on BUY, or `shortEntry`, `shortTp`, `shortSl` on SELL. The default payload's `entry`, `tp`, and `sl` are also supported. Quoted decimal prices are accepted; `NaN`, missing stops, and invalid price brackets are rejected. Update the Chartify alert symbol to QQQ and use QQQ-derived signal prices; the app compares its signal entry with Bybit's QQQUSDT quote.
 
 ### Read-only authentication diagnostic
 
@@ -96,7 +96,7 @@ Only share this sanitized output. Do not share raw response bodies, authenticati
 
 ### Enable demo submission
 
-Only after verifying a real entry payload, switch SPYUSDT to **one-way mode** in Bybit Demo. Configure leverage and margin there yourself; the app does not change them. Confirm sufficient demo balance and verify that liquidation would not occur before the stop. Use a demo API key with read-position/order and contract-trading permissions only, not withdrawal permissions.
+Only after verifying a real QQQ entry payload, switch QQQUSDT to **one-way mode** in Bybit Demo. Configure leverage and margin there yourself; the app does not change them. Confirm sufficient demo balance and verify that liquidation would not occur before the stop. Use a demo API key with read-position/order and contract-trading permissions only, not withdrawal permissions.
 
 Stop the API, then run these commands yourself in its PowerShell 7 terminal. The masked prompts keep secrets out of pasted commands; do not share them with the assistant.
 
@@ -119,9 +119,9 @@ Removal checklist:
 - Remove the optional `allowTestOrders` argument from `DemoOrderPlanner.Create` and both trader calls; restore unconditional test rejection in the planner.
 - Remove the marked opt-in mock checks in `Tests/Program.cs`, but retain and run the default test-event rejection checks and all real-trade safety checks.
 - Remove this temporary setup section and unset `Bybit__AllowTestOrders` in the launch terminal. Confirm tests cannot submit even with `Bybit__Enabled=true`.
-- Keep SPYUSDT position/pending-order blocking, risk sizing, timestamp/price guards, duplicate protection, and uncertain-submission handling. Preserve the execution journal and its historical `isTest` metadata; do not delete records to remove the temporary feature.
+- Keep QQQUSDT position/pending-order blocking, risk sizing, timestamp/price guards, duplicate protection, and uncertain-submission handling. Preserve execution history, including legacy SPY records and historical `isTest` metadata; do not delete records to remove the temporary feature. Legacy records without a `symbol` are not treated as QQQ records.
 
-For the temporary demo test, keep your existing webhook token and Demo API credentials in the same PowerShell terminal. Stop the API with Ctrl+C first. Ensure SPYUSDT is in one-way mode, demo funds are available, and no SPYUSDT position or pending order exists.
+For the temporary demo test, keep your existing webhook token and Demo API credentials in the same PowerShell terminal. Stop the API with Ctrl+C first. Ensure QQQUSDT is in one-way mode, demo funds are available, and no QQQUSDT position or pending order exists. This test-only exception still routes exclusively to QQQUSDT.
 
 First inspect a test plan without submitting:
 
@@ -153,7 +153,7 @@ $env:Bybit__Enabled = 'false'
 dotnet run --urls http://localhost:5080
 ```
 
-This does not cancel existing orders or close a filled position; manage those in Bybit Demo. In particular, a previously submitted limit order is NOT converted or cancelled by changing the app to market execution. It continues blocking SPYUSDT entries until terminal. The consumed marker remains in the journal intentionally. Automatic real-signal execution requires separate explicit configuration as described above.
+This does not cancel existing orders or close a filled position; manage those in Bybit Demo. In particular, a previously submitted limit order is NOT converted or cancelled by changing the app to market execution. Existing SPY orders/positions remain untouched; any QQQUSDT pending order continues blocking QQQUSDT entries until terminal. The consumed marker remains in the journal intentionally. Automatic real-signal execution requires separate explicit configuration as described above.
 
 Stale test timestamps remain blocked. Your custom `"time": "{{time}}"` may refer to an older candle. For a newly sent demo test you can try `"time": "{{timenow}}"` using the placeholder picker, then inspect the dry-run capture to confirm it substitutes a current ISO UTC timestamp or numeric Unix seconds. Keep the original plot prices and the venue-price guards; changing the timestamp does not make stale prices current. Do not fabricate or replay an old signal to bypass these checks.
 
@@ -165,7 +165,7 @@ Stale test timestamps remain blocked. Your custom `"time": "{{time}}"` may refer
 - The 10 USDT limit is planned gross entry-to-stop risk, NOT a guaranteed maximum loss of $10. Fees, funding, slippage, gaps, and liquidation can increase actual loss. USDT is not guaranteed to equal USD. The exposure cap may reduce planned risk below 10 USDT.
 - Enabled execution requires a signal timestamp within the last 300 seconds and no more than 30 seconds into the future. ISO UTC strings or numeric Unix seconds are accepted. `Bybit__MaximumSignalAgeSeconds` changes the age limit. If `{{time}}` is the candle opening time, delayed or longer-timeframe signals may be skipped; verify its semantics before changing the limit.
 - A Chartify entry more than 2% from Bybit's executable quote, or a quote/buffered entry outside the proposed TP/SL bracket, is skipped. Market execution addresses missed limit fills but does not make an equity feed equivalent to a perpetual feed. Different sessions and adjustments still matter.
-- Any pending SPYUSDT order blocks new signals, including old limit orders. The app does not automatically cancel them or convert them to market. A previous accepted order must have a terminal status in Bybit order history before another can proceed. Missing history fails closed.
+- Any pending QQQUSDT order blocks new signals, including old limit orders. The app does not automatically cancel them or convert them to market. A previous accepted QQQUSDT order must have a terminal status in Bybit order history before another can proceed. Legacy SPY journal entries do not block QQQUSDT. Missing QQQUSDT history fails closed.
 - No automatic retries follow a submission attempt. A deterministic order link ID and durable `data/executions.json` journal prevent duplicate attempts across restarts. The identity uses symbol, side, event type, timeframe, signal timestamp, and rounded entry/TP/SL prices; changing these can create a different signal identity.
 - A submission intent is saved before sending. Timeouts, exchange errors, or an unresolved intent pause execution. Inspect Bybit's order history and positions using the order link ID before any manual recovery; NEVER delete the journal to force retries. Preserve a backup and reconcile uncertain records before restarting. The journal is stored alongside the configured event database.
 - After market acceptance, the app checks order history and position protection up to 8 times with 250 ms between checks (network time is additional). It verifies filled quantity, average price, gross stop-distance risk at or below 10 USDT, one-way position size/direction, and the expected full-position TP/SL. A partial terminal fill can pass using its actual quantity; a zero-fill terminal cancellation is recorded as `NoFill` and never retried automatically.
