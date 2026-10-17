@@ -19,7 +19,8 @@ public static class BybitDemoAuthenticationCheck
             return new(false, null, null, "Credentials contain whitespace; re-enter the original matching pair privately.");
 
         const string query = "category=linear&symbol=QQQUSDT&limit=1";
-        const string receiveWindow = "5000";
+        var receiveWindow = configuration.GetValue("Bybit:ReceiveWindowMs", 20000)
+            .ToString(CultureInfo.InvariantCulture);
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
         var signature = Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret),
             Encoding.UTF8.GetBytes(timestamp + key + receiveWindow + query))).ToLowerInvariant();

@@ -318,6 +318,8 @@ sealed class DemoHandler : HttpMessageHandler
             var apiKey = request.Headers.GetValues("X-BAPI-API-KEY").Single();
             var timestamp = request.Headers.GetValues("X-BAPI-TIMESTAMP").Single();
             var receiveWindow = request.Headers.GetValues("X-BAPI-RECV-WINDOW").Single();
+            if (receiveWindow != "20000")
+                throw new InvalidOperationException("Unexpected SDK receive window.");
             if (!long.TryParse(timestamp, out var milliseconds) ||
                 Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - milliseconds) > 5000)
                 throw new InvalidOperationException("Invalid SDK timestamp units or format.");

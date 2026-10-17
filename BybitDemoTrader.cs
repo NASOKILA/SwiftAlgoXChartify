@@ -92,8 +92,12 @@ public sealed class BybitDemoTrader : IDisposable
             if (records.Any(record => record["orderLinkId"]?.Value<string>() == linkId))
                 return "Skipped: signal already attempted; no automatic retry.";
 
-            var trade = new BybitTradeService(client, apiKey: key, apiSecret: secret, url: DemoUrl);
-            var positions = new BybitPositionService(client, apiKey: key, apiSecret: secret, url: DemoUrl);
+            var receiveWindow = configuration.GetValue("Bybit:ReceiveWindowMs", 20000)
+                .ToString(CultureInfo.InvariantCulture);
+            var trade = new BybitTradeService(client, apiKey: key, apiSecret: secret,
+                url: DemoUrl, recvWindow: receiveWindow);
+            var positions = new BybitPositionService(client, apiKey: key, apiSecret: secret,
+                url: DemoUrl, recvWindow: receiveWindow);
             foreach (var group in records
                 .Where(record => record["symbol"]?.Value<string>() == symbol)
                 .GroupBy(record => record["orderLinkId"]?.Value<string>()))
