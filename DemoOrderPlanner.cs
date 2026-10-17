@@ -7,6 +7,31 @@ public sealed record DemoOrderPlan(string Side, decimal Entry, decimal TakeProfi
 public static class DemoOrderPlanner
 {
     // TEMPORARY DEMO TEST: remove allowTestOrders and restore unconditional test rejection after verification.
+    public static bool TryResolveBybitSymbol(JsonElement payload, out string bybitSymbol, out string reason)
+    {
+        bybitSymbol = "";
+        reason = "Only QQQ and NVDA BUY or SELL signals are supported.";
+        if (payload.ValueKind != JsonValueKind.Object ||
+            !payload.TryGetProperty("symbol", out var symbol) || symbol.ValueKind != JsonValueKind.String)
+            return false;
+
+        switch (symbol.GetString()?.Trim().ToUpperInvariant())
+        {
+            case "QQQ":
+            case "QQQUSDT":
+            case "QQQ/USDT":
+                bybitSymbol = "QQQUSDT";
+                return true;
+            case "NVDA":
+            case "NVDAUSDT":
+            case "NVDA/USDT":
+                bybitSymbol = "NVDAUSDT";
+                return true;
+            default:
+                return false;
+        }
+    }
+
     public static DemoOrderPlan? Create(JsonElement payload, string allowedEventType,
         decimal quantityStep, decimal minimumQuantity, decimal maximumQuantity,
         decimal tickSize, decimal minimumNotional, decimal maximumNotional,
@@ -21,10 +46,7 @@ public static class DemoOrderPlanner
             !string.Equals(eventType.GetString(), allowedEventType, StringComparison.Ordinal))
             return null;
 
-        reason = "Only QQQ/QQQUSDT BUY or SELL signals are supported.";
-        if (!payload.TryGetProperty("symbol", out var symbol) ||
-            symbol.ValueKind != JsonValueKind.String ||
-            (symbol.GetString() != "QQQ" && symbol.GetString() != "QQQUSDT") ||
+        if (!TryResolveBybitSymbol(payload, out _, out reason) ||
             !payload.TryGetProperty("signalType", out var signalType) ||
             signalType.ValueKind != JsonValueKind.String)
             return null;

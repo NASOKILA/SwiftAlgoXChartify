@@ -42,6 +42,13 @@ try
             time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568"
         });
         Check((await trader.ProcessAsync(spySignal)).StartsWith("Skipped:"), "SPY signal rejected after QQQ switch");
+        var unsupportedSignal = JsonSerializer.SerializeToElement(new
+        {
+            type = "signal", symbol = "TSLA", signalType = "buy", timeframe = "5",
+            time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568",
+            tradeQualityScore = "95.5"
+        });
+        Check((await trader.ProcessAsync(unsupportedSignal)).StartsWith("Skipped:"), "Unapproved symbol rejected");
         Check((await trader.ProcessAsync(Signal(0, "signal", "NaN"))).StartsWith("Skipped:"), "Invalid stop blocked");
         Check((await trader.ProcessAsync(Signal(-600))).StartsWith("Skipped:"), "Stale signal blocked");
         Check(handler.Requests == 0, "Rejected events made no API requests");
@@ -239,6 +246,28 @@ try
         Check((await trader.ProcessAsync(Signal(1, "signal"))).StartsWith("Demo market fill"),
             "Legacy unresolved SPY record does not block QQQ execution");
     }
+
+    var nvdaJournal = Path.Combine(directory, "nvda-executions.json");
+    await File.WriteAllTextAsync(nvdaJournal, JsonSerializer.Serialize(new[]
+    {
+        new { orderLinkId = "old-qqq-order", symbol = "QQQUSDT", state = "Unknown", isTest = false }
+    }));
+    var nvdaHandler = new DemoHandler { TargetSymbol = "NVDAUSDT" };
+    var nvdaSignal = JsonSerializer.SerializeToElement(new
+    {
+        type = "signal", symbol = "NVDA/USDT", signalType = "buy", timeframe = "5",
+        time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568",
+        tradeQualityScore = "95.5"
+    });
+    using (nvdaHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        nvdaJournal, new HttpClient(nvdaHandler)))
+    {
+        var result = await trader.ProcessAsync(nvdaSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" NVDA at ") &&
+            nvdaHandler.Orders == 1,
+            "NVDA/USDT routes to NVDAUSDT; unresolved QQQ journal entry does not block it");
+    }
 }
 finally
 {
@@ -259,6 +288,7 @@ sealed class DemoHandler : HttpMessageHandler
     public HttpStatusCode PrivateHttpStatus { get; set; } = HttpStatusCode.OK;
     public string? PrivateResponseBody { get; set; }
     public int? HeaderErrorCode { get; set; }
+    public string TargetSymbol { get; set; } = "QQQUSDT";
     public string? SubmittedLinkId { get; private set; }
     public string SubmittedQuantity { get; private set; } = "0";
     public string ExpectedQuantity { get; set; } = "2.14";
@@ -326,7 +356,7 @@ sealed class DemoHandler : HttpMessageHandler
                 using (var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken)))
                 {
                     var order = document.RootElement;
-                    if (order.GetProperty("symbol").GetString() != "QQQUSDT" ||
+                    if (order.GetProperty("symbol").GetString() != TargetSymbol ||
                         order.GetProperty("category").GetString() != "linear" ||
                         order.GetProperty("orderType").GetString() != "Market" ||
                         order.GetProperty("qty").GetString() != ExpectedQuantity ||
@@ -350,10 +380,10 @@ sealed class DemoHandler : HttpMessageHandler
                     cumExecQty = FilledQuantity ?? SubmittedQuantity, avgPrice = FillPrice ?? LastPrice } } };
                 break;
             case "/v5/order/realtime":
-                result = new { list = ActiveOrders ? new[] { new { symbol = "QQQUSDT", orderStatus = "New" } } : [], nextPageCursor = "" };
+                result = new { list = ActiveOrders ? new[] { new { symbol = TargetSymbol, orderStatus = "New" } } : [], nextPageCursor = "" };
                 break;
             case "/v5/position/list":
-                result = new { category = "linear", list = new[] { new { symbol = "QQQUSDT", size = PositionSize,
+                result = new { category = "linear", list = new[] { new { symbol = TargetSymbol, size = PositionSize,
                     positionIdx = 0, side = ExpectedSide, stopLoss = ProtectionPresent ? ExpectedStop : "0",
                     takeProfit = ProtectionPresent ? ExpectedTarget : "0" } }, nextPageCursor = "" };
                 break;
@@ -362,7 +392,7 @@ sealed class DemoHandler : HttpMessageHandler
                 {
                     list = new[] { new
                     {
-                        symbol = "QQQUSDT", status = "Trading", contractType = "LinearPerpetual", settleCoin = "USDT",
+                        symbol = TargetSymbol, status = "Trading", contractType = "LinearPerpetual", settleCoin = "USDT",
                         priceFilter = new { tickSize = "0.01" },
                         lotSizeFilter = new { qtyStep = "0.01", minOrderQty = "0.01", maxOrderQty = "5200",
                             maxMktOrderQty = MaximumMarketQuantity, minNotionalValue = "5" }
@@ -370,7 +400,7 @@ sealed class DemoHandler : HttpMessageHandler
                 };
                 break;
             case "/v5/market/tickers":
-                result = new { list = new[] { new { symbol = "QQQUSDT", lastPrice = LastPrice,
+                result = new { list = new[] { new { symbol = TargetSymbol, lastPrice = LastPrice,
                     bid1Price = BidPrice ?? LastPrice, ask1Price = AskPrice ?? LastPrice } } };
                 break;
             default:
