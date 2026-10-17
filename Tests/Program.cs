@@ -49,7 +49,7 @@ try
         Check((await trader.ProcessAsync(spySignal)).StartsWith("Skipped:"), "SPY signal rejected after QQQ switch");
         var unsupportedSignal = JsonSerializer.SerializeToElement(new
         {
-            type = "signal", symbol = "TSLA", signalType = "buy", timeframe = "5",
+            type = "signal", symbol = "AAPL", signalType = "buy", timeframe = "5",
             time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568",
             tradeQualityScore = "95.5"
         });
@@ -323,6 +323,27 @@ try
         Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" META at 707.42") &&
             metaHandler.Orders == 1 && metaHandler.SubmittedQuantity == "2.82",
             "META routes to METAUSDT and accepts a 0.28% Chartify/Bybit entry gap using Bybit sizing");
+    }
+
+    var teslaSignal = JsonSerializer.SerializeToElement(new
+    {
+        type = "signal", symbol = "TSLA/USDT", signalType = "buy", timeframe = "5",
+        time = DateTimeOffset.UtcNow.ToString("O"), longEntry = "352.37", longTp = "357.00", longSl = "348.00"
+    });
+    var teslaHandler = new DemoHandler
+    {
+        TargetSymbol = "TSLAUSDT", LastPrice = "352.37", BidPrice = "352.31", AskPrice = "352.37",
+        ExpectedQuantity = "2.11", ExpectedStop = "348.00", ExpectedTarget = "357.00",
+        MaximumMarketQuantity = "2000"
+    };
+    using (teslaHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        Path.Combine(directory, "tsla-executions.json"), new HttpClient(teslaHandler)))
+    {
+        var result = await trader.ProcessAsync(teslaSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" TSLA at 352.37") &&
+            teslaHandler.Orders == 1 && teslaHandler.SubmittedQuantity == "2.11",
+            "TSLA/USDT routes to TSLAUSDT and verifies an independent trade");
     }
 }
 finally
