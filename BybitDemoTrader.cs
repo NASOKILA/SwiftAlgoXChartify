@@ -26,7 +26,10 @@ public sealed class BybitDemoTrader : IDisposable
         this.configuration = configuration;
         this.logger = logger;
         this.journalPath = journalPath;
-        client = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        client = httpClient ?? new HttpClient(new BybitTimestampSigningHandler(
+            configuration["Bybit:ApiSecret"] ?? "",
+            configuration.GetValue("Bybit:TimestampOffsetMs", -2000)))
+        { Timeout = TimeSpan.FromSeconds(15) };
         journal = new JsonEventStore(journalPath);
     }
 

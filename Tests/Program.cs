@@ -1,7 +1,12 @@
 using System.Net;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using bybit.net.api;
+using bybit.net.api.ApiServiceImp;
+using bybit.net.api.Models;
+using bybit.net.api.Models.Trade;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -146,12 +151,32 @@ try
             "API check failure remains paused without automatic retry");
     }
 
-    using (var authHandler = new DemoHandler())
+    using (var authHandler = new DemoHandler { ServerTimeOffsetMilliseconds = -1530 })
     using (var authClient = new HttpClient(authHandler))
     {
         var result = await BybitDemoAuthenticationCheck.CheckAsync(configuration, authClient);
         Check(result.Success && authHandler.Requests == 1 && authHandler.Orders == 0,
             "Read-only authentication check succeeds with a signed GET and no orders");
+    }
+    var skewedClockHandler = new DemoHandler { ServerTimeOffsetMilliseconds = -1530 };
+    using (var correctedClient = new HttpClient(new BybitTimestampSigningHandler(
+        "mock-secret-not-a-real-credential", -2000, skewedClockHandler)))
+    {
+        var trade = new BybitTradeService(correctedClient, apiKey: "mock-key-not-a-real-credential",
+            apiSecret: "mock-secret-not-a-real-credential", url: "https://api-demo.bybit.com",
+            recvWindow: "20000");
+        await trade.GetOpenOrders(Category.LINEAR, symbol: "QQQUSDT", limit: 1);
+        Check(skewedClockHandler.LastPrivateTimestamp.HasValue &&
+            Math.Abs(skewedClockHandler.LastPrivateTimestamp.Value -
+                (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1530)) < 1000,
+            "SDK request timestamp is corrected and re-signed for a clock 1.53 seconds ahead");
+        var orderResult = await trade.PlaceOrder(Category.LINEAR, "QQQUSDT", Side.BUY,
+            OrderType.MARKET, qty: "2.14", timeInForce: TimeInForce.IOC, positionIdx: 0,
+            orderLinkId: "sax-timestamp-handler-test", takeProfit: "782.35", stopLoss: "774.57",
+            tpTriggerBy: TriggerBy.LastPrice, slTriggerBy: TriggerBy.LastPrice,
+            tpslMode: TpslMode.Full, tpOrderType: OrderType.MARKET, slOrderType: OrderType.MARKET);
+        Check(orderResult?.Contains("mock-order-id") == true && skewedClockHandler.Orders == 1,
+            "SDK handler re-signs the order body with the corrected timestamp");
     }
     using (var authHandler = new DemoHandler { PrivateErrorCode = 10004, PrivateHttpStatus = HttpStatusCode.Unauthorized })
     using (var authClient = new HttpClient(authHandler))
@@ -289,6 +314,8 @@ sealed class DemoHandler : HttpMessageHandler
     public string? PrivateResponseBody { get; set; }
     public int? HeaderErrorCode { get; set; }
     public string TargetSymbol { get; set; } = "QQQUSDT";
+    public int ServerTimeOffsetMilliseconds { get; set; }
+    public long? LastPrivateTimestamp { get; private set; }
     public string? SubmittedLinkId { get; private set; }
     public string SubmittedQuantity { get; private set; } = "0";
     public string ExpectedQuantity { get; set; } = "2.14";
@@ -320,9 +347,12 @@ sealed class DemoHandler : HttpMessageHandler
             var receiveWindow = request.Headers.GetValues("X-BAPI-RECV-WINDOW").Single();
             if (receiveWindow != "20000")
                 throw new InvalidOperationException("Unexpected SDK receive window.");
+            var serverTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + ServerTimeOffsetMilliseconds;
             if (!long.TryParse(timestamp, out var milliseconds) ||
-                Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - milliseconds) > 5000)
+                milliseconds < serverTime - long.Parse(receiveWindow, CultureInfo.InvariantCulture) ||
+                milliseconds >= serverTime + 1000)
                 throw new InvalidOperationException("Invalid SDK timestamp units or format.");
+            LastPrivateTimestamp = milliseconds;
             var parameters = request.Method == HttpMethod.Get ? request.RequestUri.Query.TrimStart('?')
                 : await request.Content!.ReadAsStringAsync(cancellationToken);
             var signature = Convert.ToHexString(HMACSHA256.HashData(
