@@ -325,25 +325,25 @@ try
             "META routes to METAUSDT and accepts a 0.28% Chartify/Bybit entry gap using Bybit sizing");
     }
 
-    var teslaSignal = JsonSerializer.SerializeToElement(new
+    var googlSignal = JsonSerializer.SerializeToElement(new
     {
-        type = "signal", symbol = "TSLA/USDT", signalType = "buy", timeframe = "5",
-        time = DateTimeOffset.UtcNow.ToString("O"), longEntry = "352.37", longTp = "357.00", longSl = "348.00"
+        type = "signal", symbol = "GOOGL/USDT", signalType = "buy", timeframe = "5",
+        time = DateTimeOffset.UtcNow.ToString("O"), longEntry = "340.09", longTp = "345.00", longSl = "335.00"
     });
-    var teslaHandler = new DemoHandler
+    var googlHandler = new DemoHandler
     {
-        TargetSymbol = "TSLAUSDT", LastPrice = "352.37", BidPrice = "352.31", AskPrice = "352.37",
-        ExpectedQuantity = "2.11", ExpectedStop = "348.00", ExpectedTarget = "357.00",
-        MaximumMarketQuantity = "2000"
+        TargetSymbol = "GOOGLUSDT", LastPrice = "340.09", BidPrice = "340.08", AskPrice = "340.09",
+        ExpectedQuantity = "1.83", ExpectedStop = "335.00", ExpectedTarget = "345.00",
+        MaximumMarketQuantity = "1000"
     };
-    using (teslaHandler)
+    using (googlHandler)
     using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
-        Path.Combine(directory, "tsla-executions.json"), new HttpClient(teslaHandler)))
+        Path.Combine(directory, "googl-executions.json"), new HttpClient(googlHandler)))
     {
-        var result = await trader.ProcessAsync(teslaSignal);
-        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" TSLA at 352.37") &&
-            teslaHandler.Orders == 1 && teslaHandler.SubmittedQuantity == "2.11",
-            "TSLA/USDT routes to TSLAUSDT and verifies an independent trade");
+        var result = await trader.ProcessAsync(googlSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" GOOGL at 340.09") &&
+            googlHandler.Orders == 1 && googlHandler.SubmittedQuantity == "1.83",
+            "GOOGL/USDT routes to GOOGLUSDT and verifies an independent trade");
     }
 }
 finally

@@ -62,9 +62,9 @@ This is a small local event store, not a production database: every append reads
 
 ## Bybit Demo trading
 
-The executor uses Bybit's official `bybit.net.api` SDK and is restricted to `https://api-demo.bybit.com`, `QQQUSDT`, `NVDAUSDT`, `METAUSDT`, and `TSLAUSDT` USDT linear perpetuals, and one-way position mode. No live-money endpoint is configurable. Demo is different from Testnet: create keys inside **Demo Trading** on your mainnet Bybit account. See https://bybit-exchange.github.io/docs/v5/demo.
+The executor uses Bybit's official `bybit.net.api` SDK and is restricted to `https://api-demo.bybit.com`, `QQQUSDT`, `NVDAUSDT`, `METAUSDT`, and `GOOGLUSDT` USDT linear perpetuals, and one-way position mode. No live-money endpoint is configurable. Demo is different from Testnet: create keys inside **Demo Trading** on your mainnet Bybit account. See https://bybit-exchange.github.io/docs/v5/demo.
 
-The supported Chartify tickers map as `QQQ`/`QQQUSDT`/`QQQ/USDT` -> `QQQUSDT`, `NVDA`/`NVDAUSDT`/`NVDA/USDT` -> `NVDAUSDT`, `META`/`METAUSDT`/`META/USDT` -> `METAUSDT`, and `TSLA`/`TSLAUSDT`/`TSLA/USDT` -> `TSLAUSDT`. BUY opens a long; SELL opens a short and does not close an existing long. An open position or active order blocks additional entries for that same contract; QQQ, NVDA, META, and TSLA are checked independently. SPY positions/orders are not changed and do not block supported contracts. Checks are paginated. Use a dedicated demo account with no competing trading applications; remote manual activity cannot be locked atomically by this API.
+The supported Chartify tickers map as `QQQ`/`QQQUSDT`/`QQQ/USDT` -> `QQQUSDT`, `NVDA`/`NVDAUSDT`/`NVDA/USDT` -> `NVDAUSDT`, `META`/`METAUSDT`/`META/USDT` -> `METAUSDT`, and `GOOGL`/`GOOGLUSDT`/`GOOGL/USDT` -> `GOOGLUSDT`. BUY opens a long; SELL opens a short and does not close an existing long. An open position or active order blocks additional entries for that same contract; QQQ, NVDA, META, and GOOGL are checked independently. SPY positions/orders are not changed and do not block supported contracts. Checks are paginated. Use a dedicated demo account with no competing trading applications; remote manual activity cannot be locked atomically by this API.
 
 ### Start with dry run
 
@@ -96,7 +96,7 @@ Only share this sanitized output. Do not share raw response bodies, authenticati
 
 ### Enable demo submission
 
-Only after verifying a real QQQ, NVDA, META, or TSLA entry payload, switch each intended contract to **one-way mode** in Bybit Demo. Configure leverage and margin there yourself; the app does not change them. Confirm sufficient demo balance and verify that liquidation would not occur before the stop. Use a demo API key with read-position/order and contract-trading permissions only, not withdrawal permissions.
+Only after verifying a real QQQ, NVDA, META, or GOOGL entry payload, switch each intended contract to **one-way mode** in Bybit Demo. Configure leverage and margin there yourself; the app does not change them. Confirm sufficient demo balance and verify that liquidation would not occur before the stop. Use a demo API key with read-position/order and contract-trading permissions only, not withdrawal permissions.
 
 Stop the API, then run these commands yourself in its PowerShell 7 terminal. The masked prompts keep secrets out of pasted commands; do not share them with the assistant.
 
@@ -111,7 +111,7 @@ The allowed entry-event type and webhook token must still be set in this same sh
 
 ### TEMPORARY ONLY: five Chartify test trades
 
-This exception exists only to verify demo order submission. Remove it after testing; normal operation must reject all test events and execute only explicitly allowed real entry events. Code markers use `TEMPORARY DEMO TEST` so the exception is easy to find. The test-only allowance is five distinct submission attempts total across QQQ, NVDA, META, and TSLA.
+This exception exists only to verify demo order submission. Remove it after testing; normal operation must reject all test events and execute only explicitly allowed real entry events. Code markers use `TEMPORARY DEMO TEST` so the exception is easy to find. The test-only allowance is five distinct submission attempts total across QQQ, NVDA, META, and GOOGL.
 
 Removal checklist:
 
@@ -119,9 +119,9 @@ Removal checklist:
 - Remove the optional `allowTestOrders` argument from `DemoOrderPlanner.Create` and both trader calls; restore unconditional test rejection in the planner.
 - Remove the marked opt-in mock checks in `Tests/Program.cs`, but retain and run the default test-event rejection checks and all real-trade safety checks.
 - Remove this temporary setup section and unset `Bybit__AllowTestOrders` in the launch terminal. Confirm tests cannot submit even with `Bybit__Enabled=true`.
-- Keep per-symbol QQQUSDT/NVDAUSDT/METAUSDT/TSLAUSDT position/pending-order blocking, risk sizing, timestamp/price guards, duplicate protection, and uncertain-submission handling. Preserve execution history, including legacy SPY records and historical `isTest` metadata; do not delete records to remove the temporary feature. Legacy records without a `symbol` are not treated as QQQ, NVDA, META, or TSLA records.
+- Keep per-symbol QQQUSDT/NVDAUSDT/METAUSDT/GOOGLUSDT position/pending-order blocking, risk sizing, timestamp/price guards, duplicate protection, and uncertain-submission handling. Preserve execution history, including legacy SPY records and historical `isTest` metadata; do not delete records to remove the temporary feature. Legacy records without a `symbol` are not treated as QQQ, NVDA, META, or GOOGL records.
 
-For the temporary demo test, keep your existing webhook token and Demo API credentials in the same PowerShell terminal. Stop the API with Ctrl+C first. Ensure the contract in the test alert is in one-way mode, demo funds are available, and no position or pending order exists for that contract. This test-only exception is restricted to QQQ, NVDA, META, and TSLA.
+For the temporary demo test, keep your existing webhook token and Demo API credentials in the same PowerShell terminal. Stop the API with Ctrl+C first. Ensure the contract in the test alert is in one-way mode, demo funds are available, and no position or pending order exists for that contract. This test-only exception is restricted to QQQ, NVDA, META, and GOOGL.
 
 First inspect a test plan without submitting:
 
@@ -166,7 +166,7 @@ Stale test timestamps remain blocked. Your custom `"time": "{{time}}"` may refer
 - The 10 USDT limit is planned gross entry-to-stop risk, NOT a guaranteed maximum loss of $10. Fees, funding, slippage, gaps, and liquidation can increase actual loss. USDT is not guaranteed to equal USD. The exposure cap may reduce planned risk below 10 USDT.
 - Enabled execution requires a signal timestamp within the last 300 seconds and no more than 30 seconds into the future. ISO UTC strings or numeric Unix seconds are accepted. `Bybit__MaximumSignalAgeSeconds` changes the age limit. If `{{time}}` is the candle opening time, delayed or longer-timeframe signals may be skipped; verify its semantics before changing the limit.
 - A Chartify entry more than 2% from Bybit's executable quote, or a quote/buffered entry outside the proposed TP/SL bracket, is skipped. Market execution addresses missed limit fills but does not make an equity feed equivalent to a perpetual feed. Different sessions and adjustments still matter.
-- Any pending order for the selected QQQUSDT, NVDAUSDT, METAUSDT, or TSLAUSDT contract blocks new signals for that same contract, including old limit orders. The app does not automatically cancel them or convert them to market. A previous accepted order for that contract must have a terminal status in Bybit order history before another can proceed. Orders and journal history for other symbols do not block it. Missing history fails closed.
+- Any pending order for the selected QQQUSDT, NVDAUSDT, METAUSDT, or GOOGLUSDT contract blocks new signals for that same contract, including old limit orders. The app does not automatically cancel them or convert them to market. A previous accepted order for that contract must have a terminal status in Bybit order history before another can proceed. Orders and journal history for other symbols do not block it. Missing history fails closed.
 - No automatic retries follow a submission attempt. A deterministic order link ID and durable `data/executions.json` journal prevent duplicate attempts across restarts. The identity uses symbol, side, event type, timeframe, signal timestamp, and rounded entry/TP/SL prices; changing these can create a different signal identity.
 - A submission intent is saved before sending. Timeouts, exchange errors, or an unresolved intent pause execution. Inspect Bybit's order history and positions using the order link ID before any manual recovery; NEVER delete the journal to force retries. Preserve a backup and reconcile uncertain records before restarting. The journal is stored alongside the configured event database.
 - After market acceptance, the app checks order history and position protection up to 8 times with 250 ms between checks (network time is additional). It verifies filled quantity, average price, gross stop-distance risk at or below 10 USDT, one-way position size/direction, and the expected full-position TP/SL. A partial terminal fill can pass using its actual quantity; a zero-fill terminal cancellation is recorded as `NoFill` and never retried automatically.
