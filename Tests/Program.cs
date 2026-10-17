@@ -1,7 +1,12 @@
 using System.Net;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using bybit.net.api;
+using bybit.net.api.ApiServiceImp;
+using bybit.net.api.Models;
+using bybit.net.api.Models.Trade;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -42,6 +47,13 @@ try
             time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568"
         });
         Check((await trader.ProcessAsync(spySignal)).StartsWith("Skipped:"), "SPY signal rejected after QQQ switch");
+        var unsupportedSignal = JsonSerializer.SerializeToElement(new
+        {
+            type = "signal", symbol = "TSLA", signalType = "buy", timeframe = "5",
+            time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568",
+            tradeQualityScore = "95.5"
+        });
+        Check((await trader.ProcessAsync(unsupportedSignal)).StartsWith("Skipped:"), "Unapproved symbol rejected");
         Check((await trader.ProcessAsync(Signal(0, "signal", "NaN"))).StartsWith("Skipped:"), "Invalid stop blocked");
         Check((await trader.ProcessAsync(Signal(-600))).StartsWith("Skipped:"), "Stale signal blocked");
         Check(handler.Requests == 0, "Rejected events made no API requests");
@@ -102,12 +114,22 @@ try
             trader.ProcessAsync(Signal(1, "test")));
         Check(results.Count(result => result.StartsWith("Demo market fill")) == 1 && testHandler.Orders == 1,
             "Only one concurrent test submits an order with capped risk and TP/SL");
-        Check((await trader.ProcessAsync(Signal(2, "test"))).Contains("allowance consumed"), "Subsequent distinct test blocked");
+        testHandler.PositionSize = "0";
+        for (var sequence = 2; sequence <= 5; sequence++)
+        {
+            var result = await trader.ProcessAsync(Signal(sequence, "test"));
+            Check(result.StartsWith("Demo market fill"), $"Test trade {sequence} of five can submit: {result}");
+            testHandler.PositionSize = "0";
+        }
+        Check(testHandler.Orders == 5, "Exactly five distinct test trades can submit");
+        Check((await trader.ProcessAsync(Signal(6, "test"))).Contains("allowance consumed"),
+            "Sixth distinct test trade is blocked");
     }
     using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
         testJournalPath, new HttpClient(testHandler, disposeHandler: false)))
     {
-        Check((await trader.ProcessAsync(Signal(3, "test"))).Contains("allowance consumed"), "One-use test protection survives restart");
+        Check((await trader.ProcessAsync(Signal(7, "test"))).Contains("allowance consumed"),
+            "Five-trade test allowance survives restart");
     }
     testHandler.Dispose();
 
@@ -121,8 +143,8 @@ try
     using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
         failedTestJournalPath, new HttpClient(failedTestHandler, disposeHandler: false)))
     {
-        Check((await trader.ProcessAsync(Signal(1, "test"))).Contains("allowance consumed") && failedTestHandler.Orders == 1,
-            "Uncertain test consumes allowance durably without retry");
+        Check((await trader.ProcessAsync(Signal(1, "test"))).Contains("unresolved submission") && failedTestHandler.Orders == 1,
+            "Uncertain test remains durably blocked without retry");
     }
     failedTestHandler.Dispose();
 
@@ -139,12 +161,32 @@ try
             "API check failure remains paused without automatic retry");
     }
 
-    using (var authHandler = new DemoHandler())
+    using (var authHandler = new DemoHandler { ServerTimeOffsetMilliseconds = -1530 })
     using (var authClient = new HttpClient(authHandler))
     {
         var result = await BybitDemoAuthenticationCheck.CheckAsync(configuration, authClient);
         Check(result.Success && authHandler.Requests == 1 && authHandler.Orders == 0,
             "Read-only authentication check succeeds with a signed GET and no orders");
+    }
+    var skewedClockHandler = new DemoHandler { ServerTimeOffsetMilliseconds = -1530 };
+    using (var correctedClient = new HttpClient(new BybitTimestampSigningHandler(
+        "mock-secret-not-a-real-credential", -2000, skewedClockHandler)))
+    {
+        var trade = new BybitTradeService(correctedClient, apiKey: "mock-key-not-a-real-credential",
+            apiSecret: "mock-secret-not-a-real-credential", url: "https://api-demo.bybit.com",
+            recvWindow: "20000");
+        await trade.GetOpenOrders(Category.LINEAR, symbol: "QQQUSDT", limit: 1);
+        Check(skewedClockHandler.LastPrivateTimestamp.HasValue &&
+            Math.Abs(skewedClockHandler.LastPrivateTimestamp.Value -
+                (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - 1530)) < 1000,
+            "SDK request timestamp is corrected and re-signed for a clock 1.53 seconds ahead");
+        var orderResult = await trade.PlaceOrder(Category.LINEAR, "QQQUSDT", Side.BUY,
+            OrderType.MARKET, qty: "2.14", timeInForce: TimeInForce.IOC, positionIdx: 0,
+            orderLinkId: "sax-timestamp-handler-test", takeProfit: "782.35", stopLoss: "774.57",
+            tpTriggerBy: TriggerBy.LastPrice, slTriggerBy: TriggerBy.LastPrice,
+            tpslMode: TpslMode.Full, tpOrderType: OrderType.MARKET, slOrderType: OrderType.MARKET);
+        Check(orderResult?.Contains("mock-order-id") == true && skewedClockHandler.Orders == 1,
+            "SDK handler re-signs the order body with the corrected timestamp");
     }
     using (var authHandler = new DemoHandler { PrivateErrorCode = 10004, PrivateHttpStatus = HttpStatusCode.Unauthorized })
     using (var authClient = new HttpClient(authHandler))
@@ -239,6 +281,91 @@ try
         Check((await trader.ProcessAsync(Signal(1, "signal"))).StartsWith("Demo market fill"),
             "Legacy unresolved SPY record does not block QQQ execution");
     }
+
+    var nvdaJournal = Path.Combine(directory, "nvda-executions.json");
+    await File.WriteAllTextAsync(nvdaJournal, JsonSerializer.Serialize(new[]
+    {
+        new { orderLinkId = "old-qqq-order", symbol = "QQQUSDT", state = "Unknown", isTest = false }
+    }));
+    var nvdaHandler = new DemoHandler { TargetSymbol = "NVDAUSDT" };
+    var nvdaSignal = JsonSerializer.SerializeToElement(new
+    {
+        type = "signal", symbol = "NVDA/USDT", signalType = "buy", timeframe = "5",
+        time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568",
+        tradeQualityScore = "95.5"
+    });
+    using (nvdaHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        nvdaJournal, new HttpClient(nvdaHandler)))
+    {
+        var result = await trader.ProcessAsync(nvdaSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" NVDA at ") &&
+            nvdaHandler.Orders == 1,
+            "NVDA/USDT routes to NVDAUSDT; unresolved QQQ journal entry does not block it");
+    }
+
+    var metaSignal = JsonSerializer.SerializeToElement(new
+    {
+        type = "signal", symbol = "META", signalType = "buy", timeframe = "5",
+        time = DateTimeOffset.UtcNow.ToString("O"), longEntry = "709.40", longTp = "713.00", longSl = "706.00"
+    });
+    var metaHandler = new DemoHandler
+    {
+        TargetSymbol = "METAUSDT", LastPrice = "707.42", BidPrice = "707.40", AskPrice = "707.46",
+        ExpectedQuantity = "2.82", ExpectedStop = "706.00", ExpectedTarget = "713.00",
+        MaximumMarketQuantity = "500"
+    };
+    using (metaHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        Path.Combine(directory, "meta-executions.json"), new HttpClient(metaHandler)))
+    {
+        var result = await trader.ProcessAsync(metaSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" META at 707.42") &&
+            metaHandler.Orders == 1 && metaHandler.SubmittedQuantity == "2.82",
+            "META routes to METAUSDT and accepts a 0.28% Chartify/Bybit entry gap using Bybit sizing");
+    }
+
+    var googlSignal = JsonSerializer.SerializeToElement(new
+    {
+        type = "signal", symbol = "GOOGL/USDT", signalType = "buy", timeframe = "5",
+        time = DateTimeOffset.UtcNow.ToString("O"), longEntry = "340.09", longTp = "345.00", longSl = "335.00"
+    });
+    var googlHandler = new DemoHandler
+    {
+        TargetSymbol = "GOOGLUSDT", LastPrice = "340.09", BidPrice = "340.08", AskPrice = "340.09",
+        ExpectedQuantity = "1.83", ExpectedStop = "335.00", ExpectedTarget = "345.00",
+        MaximumMarketQuantity = "1000"
+    };
+    using (googlHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        Path.Combine(directory, "googl-executions.json"), new HttpClient(googlHandler)))
+    {
+        var result = await trader.ProcessAsync(googlSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" GOOGL at 340.09") &&
+            googlHandler.Orders == 1 && googlHandler.SubmittedQuantity == "1.83",
+            "GOOGL/USDT routes to GOOGLUSDT and verifies an independent trade");
+    }
+
+    var aaplSignal = JsonSerializer.SerializeToElement(new
+    {
+        type = "signal", symbol = "AAPL/USDT", signalType = "buy", timeframe = "5",
+        time = DateTimeOffset.UtcNow.ToString("O"), longEntry = "343.26", longTp = "348.00", longSl = "340.00"
+    });
+    var aaplHandler = new DemoHandler
+    {
+        TargetSymbol = "AAPLUSDT", LastPrice = "343.25", BidPrice = "343.25", AskPrice = "343.26",
+        ExpectedQuantity = "2.77", ExpectedStop = "340.00", ExpectedTarget = "348.00",
+        MaximumMarketQuantity = "2000"
+    };
+    using (aaplHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        Path.Combine(directory, "aapl-executions.json"), new HttpClient(aaplHandler)))
+    {
+        var result = await trader.ProcessAsync(aaplSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" AAPL at 343.25") &&
+            aaplHandler.Orders == 1 && aaplHandler.SubmittedQuantity == "2.77",
+            "AAPL/USDT routes to AAPLUSDT and verifies an independent trade");
+    }
 }
 finally
 {
@@ -259,6 +386,9 @@ sealed class DemoHandler : HttpMessageHandler
     public HttpStatusCode PrivateHttpStatus { get; set; } = HttpStatusCode.OK;
     public string? PrivateResponseBody { get; set; }
     public int? HeaderErrorCode { get; set; }
+    public string TargetSymbol { get; set; } = "QQQUSDT";
+    public int ServerTimeOffsetMilliseconds { get; set; }
+    public long? LastPrivateTimestamp { get; private set; }
     public string? SubmittedLinkId { get; private set; }
     public string SubmittedQuantity { get; private set; } = "0";
     public string ExpectedQuantity { get; set; } = "2.14";
@@ -288,9 +418,14 @@ sealed class DemoHandler : HttpMessageHandler
             var apiKey = request.Headers.GetValues("X-BAPI-API-KEY").Single();
             var timestamp = request.Headers.GetValues("X-BAPI-TIMESTAMP").Single();
             var receiveWindow = request.Headers.GetValues("X-BAPI-RECV-WINDOW").Single();
+            if (receiveWindow != "20000")
+                throw new InvalidOperationException("Unexpected SDK receive window.");
+            var serverTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + ServerTimeOffsetMilliseconds;
             if (!long.TryParse(timestamp, out var milliseconds) ||
-                Math.Abs(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - milliseconds) > 5000)
+                milliseconds < serverTime - long.Parse(receiveWindow, CultureInfo.InvariantCulture) ||
+                milliseconds >= serverTime + 1000)
                 throw new InvalidOperationException("Invalid SDK timestamp units or format.");
+            LastPrivateTimestamp = milliseconds;
             var parameters = request.Method == HttpMethod.Get ? request.RequestUri.Query.TrimStart('?')
                 : await request.Content!.ReadAsStringAsync(cancellationToken);
             var signature = Convert.ToHexString(HMACSHA256.HashData(
@@ -326,7 +461,7 @@ sealed class DemoHandler : HttpMessageHandler
                 using (var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken)))
                 {
                     var order = document.RootElement;
-                    if (order.GetProperty("symbol").GetString() != "QQQUSDT" ||
+                    if (order.GetProperty("symbol").GetString() != TargetSymbol ||
                         order.GetProperty("category").GetString() != "linear" ||
                         order.GetProperty("orderType").GetString() != "Market" ||
                         order.GetProperty("qty").GetString() != ExpectedQuantity ||
@@ -350,10 +485,10 @@ sealed class DemoHandler : HttpMessageHandler
                     cumExecQty = FilledQuantity ?? SubmittedQuantity, avgPrice = FillPrice ?? LastPrice } } };
                 break;
             case "/v5/order/realtime":
-                result = new { list = ActiveOrders ? new[] { new { symbol = "QQQUSDT", orderStatus = "New" } } : [], nextPageCursor = "" };
+                result = new { list = ActiveOrders ? new[] { new { symbol = TargetSymbol, orderStatus = "New" } } : [], nextPageCursor = "" };
                 break;
             case "/v5/position/list":
-                result = new { category = "linear", list = new[] { new { symbol = "QQQUSDT", size = PositionSize,
+                result = new { category = "linear", list = new[] { new { symbol = TargetSymbol, size = PositionSize,
                     positionIdx = 0, side = ExpectedSide, stopLoss = ProtectionPresent ? ExpectedStop : "0",
                     takeProfit = ProtectionPresent ? ExpectedTarget : "0" } }, nextPageCursor = "" };
                 break;
@@ -362,7 +497,7 @@ sealed class DemoHandler : HttpMessageHandler
                 {
                     list = new[] { new
                     {
-                        symbol = "QQQUSDT", status = "Trading", contractType = "LinearPerpetual", settleCoin = "USDT",
+                        symbol = TargetSymbol, status = "Trading", contractType = "LinearPerpetual", settleCoin = "USDT",
                         priceFilter = new { tickSize = "0.01" },
                         lotSizeFilter = new { qtyStep = "0.01", minOrderQty = "0.01", maxOrderQty = "5200",
                             maxMktOrderQty = MaximumMarketQuantity, minNotionalValue = "5" }
@@ -370,7 +505,7 @@ sealed class DemoHandler : HttpMessageHandler
                 };
                 break;
             case "/v5/market/tickers":
-                result = new { list = new[] { new { symbol = "QQQUSDT", lastPrice = LastPrice,
+                result = new { list = new[] { new { symbol = TargetSymbol, lastPrice = LastPrice,
                     bid1Price = BidPrice ?? LastPrice, ask1Price = AskPrice ?? LastPrice } } };
                 break;
             default:

@@ -19,10 +19,12 @@ public static class BybitDemoAuthenticationCheck
             return new(false, null, null, "Credentials contain whitespace; re-enter the original matching pair privately.");
 
         const string query = "category=linear&symbol=QQQUSDT&limit=1";
-        const string receiveWindow = "5000";
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture);
-        var signature = Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret),
-            Encoding.UTF8.GetBytes(timestamp + key + receiveWindow + query))).ToLowerInvariant();
+        var receiveWindow = configuration.GetValue("Bybit:ReceiveWindowMs", 20000)
+            .ToString(CultureInfo.InvariantCulture);
+        var timestamp = BybitTimestampSigningHandler.AdjustTimestamp(
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture),
+            configuration.GetValue("Bybit:TimestampOffsetMs", -2000));
+        var signature = BybitTimestampSigningHandler.CreateSignature(timestamp, key, receiveWindow, query, secret);
         using var request = new HttpRequestMessage(HttpMethod.Get,
             "https://api-demo.bybit.com/v5/order/realtime?" + query);
         request.Headers.Add("X-BAPI-API-KEY", key);
