@@ -114,12 +114,22 @@ try
             trader.ProcessAsync(Signal(1, "test")));
         Check(results.Count(result => result.StartsWith("Demo market fill")) == 1 && testHandler.Orders == 1,
             "Only one concurrent test submits an order with capped risk and TP/SL");
-        Check((await trader.ProcessAsync(Signal(2, "test"))).Contains("allowance consumed"), "Subsequent distinct test blocked");
+        testHandler.PositionSize = "0";
+        for (var sequence = 2; sequence <= 5; sequence++)
+        {
+            var result = await trader.ProcessAsync(Signal(sequence, "test"));
+            Check(result.StartsWith("Demo market fill"), $"Test trade {sequence + 1} of five can submit");
+            testHandler.PositionSize = "0";
+        }
+        Check(testHandler.Orders == 5, "Exactly five distinct test trades can submit");
+        Check((await trader.ProcessAsync(Signal(6, "test"))).Contains("allowance consumed"),
+            "Sixth distinct test trade is blocked");
     }
     using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
         testJournalPath, new HttpClient(testHandler, disposeHandler: false)))
     {
-        Check((await trader.ProcessAsync(Signal(3, "test"))).Contains("allowance consumed"), "One-use test protection survives restart");
+        Check((await trader.ProcessAsync(Signal(7, "test"))).Contains("allowance consumed"),
+            "Five-trade test allowance survives restart");
     }
     testHandler.Dispose();
 
@@ -133,8 +143,8 @@ try
     using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
         failedTestJournalPath, new HttpClient(failedTestHandler, disposeHandler: false)))
     {
-        Check((await trader.ProcessAsync(Signal(1, "test"))).Contains("allowance consumed") && failedTestHandler.Orders == 1,
-            "Uncertain test consumes allowance durably without retry");
+        Check((await trader.ProcessAsync(Signal(1, "test"))).Contains("unresolved submission") && failedTestHandler.Orders == 1,
+            "Uncertain test remains durably blocked without retry");
     }
     failedTestHandler.Dispose();
 

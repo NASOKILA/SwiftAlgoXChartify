@@ -1,6 +1,6 @@
 # Chartify webhook receiver
 
-An ASP.NET Core / .NET 10 webhook receiver with a local JSON event store and an optional Bybit Demo executor. Trading is disabled by default. Test events are blocked unless explicitly enabled for a single demo submission attempt.
+An ASP.NET Core / .NET 10 webhook receiver with a local JSON event store and an optional Bybit Demo executor. Trading is disabled by default. Test events are blocked unless explicitly enabled for up to five demo submission attempts.
 
 ## Run locally
 
@@ -109,13 +109,13 @@ dotnet run --urls http://localhost:5080
 
 The allowed entry-event type and webhook token must still be set in this same shell. Keep ngrok running. Changing environment variables requires restarting the API. To stop new automatic submissions, restart with `Bybit__Enabled=false`; this does NOT cancel already submitted orders or close positions.
 
-### TEMPORARY ONLY: one-time Chartify test execution
+### TEMPORARY ONLY: five Chartify test trades
 
-This exception exists only to verify demo order submission. Remove it after this test; normal operation must reject all test events and execute only explicitly allowed real entry events. Code markers use `TEMPORARY DEMO TEST` so the exception is easy to find.
+This exception exists only to verify demo order submission. Remove it after testing; normal operation must reject all test events and execute only explicitly allowed real entry events. Code markers use `TEMPORARY DEMO TEST` so the exception is easy to find. The test-only allowance is five distinct submission attempts total across QQQ and NVDA.
 
 Removal checklist:
 
-- Remove `Bybit:AllowTestOrders`, the test-only routing, and the one-use test guard in `BybitDemoTrader.cs`; restore unconditional rejection of `type: "test"` and real-event routing via `Bybit:AllowedEventType`.
+- Remove `Bybit:AllowTestOrders`, the test-only routing, and the five-attempt test guard in `BybitDemoTrader.cs`; restore unconditional rejection of `type: "test"` and real-event routing via `Bybit:AllowedEventType`.
 - Remove the optional `allowTestOrders` argument from `DemoOrderPlanner.Create` and both trader calls; restore unconditional test rejection in the planner.
 - Remove the marked opt-in mock checks in `Tests/Program.cs`, but retain and run the default test-event rejection checks and all real-trade safety checks.
 - Remove this temporary setup section and unset `Bybit__AllowTestOrders` in the launch terminal. Confirm tests cannot submit even with `Bybit__Enabled=true`.
@@ -131,7 +131,7 @@ $env:Bybit__Enabled = 'false'
 dotnet run --urls http://localhost:5080
 ```
 
-Send Chartify's Test Webhook. Confirm the printed dry-run direction, entry, TP, SL, quantity, and planned risk. This does not consume the one-use allowance. `Bybit__AllowedEventType` is not needed for this test mode; non-test alerts are blocked while the switch is true.
+Send Chartify's Test Webhook. Confirm the printed dry-run direction, entry, TP, SL, quantity, and planned risk. Dry runs do not consume the five-attempt allowance. `Bybit__AllowedEventType` is not needed for this test mode; non-test alerts are blocked while the switch is true.
 
 To permit the one actual demo submission attempt, stop the API and restart:
 
@@ -141,9 +141,9 @@ $env:Bybit__Enabled = 'true'
 dotnet run --urls http://localhost:5080
 ```
 
-Keep ngrok running and send the Chartify test once. The API will attempt a market order only if all validation, timestamp, price, position, and pending-order checks pass. Check the terminal's execution status and verify the fill and attached TP/SL in Bybit Demo. HTTP 200 alone is not proof of order submission or fill. An already-consumed test allowance remains consumed when switching execution types; do not reset or delete the journal to run another test.
+Keep ngrok running and send up to five distinct Chartify test alerts, one at a time. The API will attempt a market order only if all validation, timestamp, price, position, and pending-order checks pass. Check the terminal's execution status and verify each fill and attached TP/SL in Bybit Demo. HTTP 200 alone is not proof of order submission or fill. The allowance is shared by QQQ and NVDA and is not reset when switching execution types; do not reset or delete the journal to get more attempts.
 
-Before sending to Bybit, an `isTest: true` submission marker is durably saved in the execution journal. This consumes the allowance even if Bybit rejects the request or the connection fails. Further tests cannot submit again, including distinct tests, concurrent requests, or requests after restart. Validation skips and dry runs do not consume it. Do not delete the journal, change its path, or remove the marker to retry an uncertain order.
+Before sending to Bybit, an `isTest: true` submission marker is durably saved in the execution journal. Each distinct marker consumes one of the five attempts, even if Bybit rejects the request or the connection fails. Duplicate deliveries do not consume another attempt; validation skips and dry runs do not consume an attempt. The count survives restarts. Do not delete the journal, change its path, or remove a marker to retry an uncertain order.
 
 After testing, stop and restart with both switches disabled:
 
@@ -188,6 +188,6 @@ If restore hits an unrelated private NuGet feed, use `dotnet restore --source ht
 
 - The URL token is an interim shared-secret authentication mechanism, not a webhook signature. Always use public HTTPS. URLs can appear in Chartify settings and proxy/access logs; redact query strings there. ASP.NET Core informational request logging is suppressed here to avoid logging the token. Rotate the token if disclosed.
 - Wrong or missing tokens return 401; malformed or empty JSON returns 400; bodies over 64 KiB return 413; storage failures return 503. JSON objects, arrays, and scalar values are accepted intentionally until the schema is known.
-- Chartify's retries, timeout, event identifiers, and signing contract are not verified. Repeated deliveries create separate event database entries. Test events are stored and excluded from demo orders by default; the explicit one-use demo test switch is the only exception.
+- Chartify's retries, timeout, event identifiers, and signing contract are not verified. Repeated deliveries create separate event database entries. Test events are stored and excluded from demo orders by default; the explicit five-attempt demo test switch is the only exception.
 - Before production trade processing, verify Chartify's signature protocol, add rate limiting, durable database/queue storage, payload validation, event-ID-based deduplication, monitoring, and a data-retention policy. Use persistent storage when hosting in a container.
 - Never execute arbitrary code from the incoming payload, and do not share tokens, API credentials, signing secrets, account identifiers, or sensitive trade details when requesting help.

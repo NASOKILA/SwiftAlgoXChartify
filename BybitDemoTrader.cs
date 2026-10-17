@@ -12,6 +12,7 @@ using Newtonsoft.Json.Linq;
 public sealed class BybitDemoTrader : IDisposable
 {
     private const string DemoUrl = "https://api-demo.bybit.com";
+    private const int MaximumTestOrderAttempts = 5;
     private readonly IConfiguration configuration;
     private readonly ILogger<BybitDemoTrader> logger;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -75,9 +76,17 @@ public sealed class BybitDemoTrader : IDisposable
                 return "Skipped: Demo API credentials are not configured.";
 
             var records = JArray.Parse(await File.ReadAllTextAsync(journalPath));
-            // TEMPORARY DEMO TEST: one-use protection; preserve historical journal records after removal.
-            if (isTest && records.Any(record => record["isTest"]?.Value<bool>() == true))
-                return "Skipped: one-time demo test already attempted; test allowance consumed.";
+            // TEMPORARY DEMO TEST: count distinct submission intents, not later journal state updates.
+            var testRecords = records
+                .Where(record => record["isTest"]?.Value<bool>() == true)
+                .Select(record => record["orderLinkId"]?.Value<string>())
+                .ToArray();
+            var testAttempts = testRecords
+                .Where(orderLinkId => !string.IsNullOrWhiteSpace(orderLinkId))
+                .Distinct(StringComparer.Ordinal)
+                .Count() + testRecords.Count(string.IsNullOrWhiteSpace);
+            if (isTest && testAttempts >= MaximumTestOrderAttempts)
+                return $"Skipped: {MaximumTestOrderAttempts}-trade test allowance consumed.";
 
             var maximumAge = configuration.GetValue("Bybit:MaximumSignalAgeSeconds", 300);
             if (!payload.TryGetProperty("time", out var time) ||
