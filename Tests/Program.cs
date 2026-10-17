@@ -49,7 +49,7 @@ try
         Check((await trader.ProcessAsync(spySignal)).StartsWith("Skipped:"), "SPY signal rejected after QQQ switch");
         var unsupportedSignal = JsonSerializer.SerializeToElement(new
         {
-            type = "signal", symbol = "AAPL", signalType = "buy", timeframe = "5",
+            type = "signal", symbol = "TSLA", signalType = "buy", timeframe = "5",
             time = timestamp.ToString("O"), longEntry = "778.46", longTp = "782.352", longSl = "774.568",
             tradeQualityScore = "95.5"
         });
@@ -344,6 +344,27 @@ try
         Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" GOOGL at 340.09") &&
             googlHandler.Orders == 1 && googlHandler.SubmittedQuantity == "1.83",
             "GOOGL/USDT routes to GOOGLUSDT and verifies an independent trade");
+    }
+
+    var aaplSignal = JsonSerializer.SerializeToElement(new
+    {
+        type = "signal", symbol = "AAPL/USDT", signalType = "buy", timeframe = "5",
+        time = DateTimeOffset.UtcNow.ToString("O"), longEntry = "343.26", longTp = "348.00", longSl = "340.00"
+    });
+    var aaplHandler = new DemoHandler
+    {
+        TargetSymbol = "AAPLUSDT", LastPrice = "343.25", BidPrice = "343.25", AskPrice = "343.26",
+        ExpectedQuantity = "2.77", ExpectedStop = "340.00", ExpectedTarget = "348.00",
+        MaximumMarketQuantity = "2000"
+    };
+    using (aaplHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        Path.Combine(directory, "aapl-executions.json"), new HttpClient(aaplHandler)))
+    {
+        var result = await trader.ProcessAsync(aaplSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" AAPL at 343.25") &&
+            aaplHandler.Orders == 1 && aaplHandler.SubmittedQuantity == "2.77",
+            "AAPL/USDT routes to AAPLUSDT and verifies an independent trade");
     }
 }
 finally

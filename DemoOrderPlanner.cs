@@ -10,7 +10,7 @@ public static class DemoOrderPlanner
     public static bool TryResolveBybitSymbol(JsonElement payload, out string bybitSymbol, out string reason)
     {
         bybitSymbol = "";
-        reason = "Only QQQ, NVDA, META and GOOGL BUY or SELL signals are supported.";
+        reason = "Only QQQ, NVDA, META, GOOGL and AAPL BUY or SELL signals are supported.";
         if (payload.ValueKind != JsonValueKind.Object ||
             !payload.TryGetProperty("symbol", out var symbol) || symbol.ValueKind != JsonValueKind.String)
             return false;
@@ -36,6 +36,11 @@ public static class DemoOrderPlanner
             case "GOOGLUSDT":
             case "GOOGL/USDT":
                 bybitSymbol = "GOOGLUSDT";
+                return true;
+            case "AAPL":
+            case "AAPLUSDT":
+            case "AAPL/USDT":
+                bybitSymbol = "AAPLUSDT";
                 return true;
             default:
                 return false;
