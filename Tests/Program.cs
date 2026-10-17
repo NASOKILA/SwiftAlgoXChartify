@@ -118,7 +118,7 @@ try
         for (var sequence = 2; sequence <= 5; sequence++)
         {
             var result = await trader.ProcessAsync(Signal(sequence, "test"));
-            Check(result.StartsWith("Demo market fill"), $"Test trade {sequence + 1} of five can submit");
+            Check(result.StartsWith("Demo market fill"), $"Test trade {sequence} of five can submit: {result}");
             testHandler.PositionSize = "0";
         }
         Check(testHandler.Orders == 5, "Exactly five distinct test trades can submit");
@@ -302,6 +302,27 @@ try
         Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" NVDA at ") &&
             nvdaHandler.Orders == 1,
             "NVDA/USDT routes to NVDAUSDT; unresolved QQQ journal entry does not block it");
+    }
+
+    var metaSignal = JsonSerializer.SerializeToElement(new
+    {
+        type = "signal", symbol = "META", signalType = "buy", timeframe = "5",
+        time = DateTimeOffset.UtcNow.ToString("O"), longEntry = "709.40", longTp = "713.00", longSl = "706.00"
+    });
+    var metaHandler = new DemoHandler
+    {
+        TargetSymbol = "METAUSDT", LastPrice = "707.42", BidPrice = "707.40", AskPrice = "707.46",
+        ExpectedQuantity = "2.82", ExpectedStop = "706.00", ExpectedTarget = "713.00",
+        MaximumMarketQuantity = "500"
+    };
+    using (metaHandler)
+    using (var trader = new BybitDemoTrader(configuration, NullLogger<BybitDemoTrader>.Instance,
+        Path.Combine(directory, "meta-executions.json"), new HttpClient(metaHandler)))
+    {
+        var result = await trader.ProcessAsync(metaSignal);
+        Check(result.StartsWith("Demo market fill and TP/SL verified:") && result.Contains(" META at 707.42") &&
+            metaHandler.Orders == 1 && metaHandler.SubmittedQuantity == "2.82",
+            "META routes to METAUSDT and accepts a 0.28% Chartify/Bybit entry gap using Bybit sizing");
     }
 }
 finally
